@@ -1,5 +1,5 @@
-use futures::Future;
 use itertools::Itertools;
+use std::future::Future;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -61,6 +61,7 @@ where
         unreachable!("not here")
     }
 }
+#[derive(Clone)]
 pub struct ActorFn<I, O, FN> {
     f: FN,
     _i: std::marker::PhantomData<I>,
@@ -154,6 +155,7 @@ where
     }
 }
 
+#[derive(Clone)]
 pub struct ActorFutureFn<I, O, F, FN>
 where
     I: Send + 'static,
