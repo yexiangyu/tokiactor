@@ -58,36 +58,36 @@ impl Actor<i32, Result<i32, Error>> for MilkTank
 
 tokio::runtime::Runtime::new().unwrap().block_on(
 	async move {
-			let _ = tracing_subscriber::fmt::try_init();
-			// create waiter actor with async closure and spawn it
-			let waiter_handle = ActorFn::new(move |Order(Icecream{milk, sugar}): Order|  {
-				info!(%milk, %sugar, "recv order");
-				(milk, sugar)
-			}).spawn(1);
+		let _ = tracing_subscriber::fmt::try_init();
+		// create waiter actor with async closure and spawn it
+		let waiter_handle = ActorFn::new(move |Order(Icecream{milk, sugar}): Order|  {
+			info!(%milk, %sugar, "recv order");
+			(milk, sugar)
+		}).spawn(1);
 
-			// create sugar actor with async closure and spawn it
-			let sugar_handle = ActorFutureFn::new(move |needs: i32| async move {
-				info!("we have ulimited sugur available, return sugur: {}", needs);
-				needs
-			}).spawn(1);
+		// create sugar actor with async closure and spawn it
+		let sugar_handle = ActorFutureFn::new(move |needs: i32| async move {
+			info!("we have ulimited sugur available, return sugur: {}", needs);
+			needs
+		}).spawn(1);
 
-			// create milk actor and spawn it
-			let milk_handle = MilkTank {milks: 10}.spawn(1);
+		// create milk actor and spawn it
+		let milk_handle = MilkTank {milks: 10}.spawn(1);
 
-			// now we need to freeze ingredient for 10 seconds
-			let freeze_handle = ActorFutureFn::new(move |(sugar, milk): (i32, Result<i32, Error>) | async move {
-				milk.map(|milk| Icecream{ milk, sugar})
-			}).spawn(1);
+		// now we need to freeze ingredient for 10 seconds
+		let freeze_handle = ActorFutureFn::new(move |(sugar, milk): (i32, Result<i32, Error>) | async move {
+			milk.map(|milk| Icecream{ milk, sugar})
+		}).spawn(1);
 
-			// Assemble things together
-			let pipeline = waiter_handle.then(sugar_handle.join(milk_handle)).then(freeze_handle);
-			for i in 0..10
-			{
-				let icecream = pipeline.handle(Order(Icecream{milk: 1, sugar: 1})).await;
-				assert!(icecream.is_ok());
-			}
+		// Assemble things together
+		let pipeline = waiter_handle.then(sugar_handle.join(milk_handle)).then(freeze_handle);
+		for i in 0..10
+		{
 			let icecream = pipeline.handle(Order(Icecream{milk: 1, sugar: 1})).await;
-			assert!(icecream.is_err());
+			assert!(icecream.is_ok());
+		}
+		let icecream = pipeline.handle(Order(Icecream{milk: 1, sugar: 1})).await;
+		assert!(icecream.is_err());
 	}
 );
 ```
