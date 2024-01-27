@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use itertools::Itertools;
 use std::future::Future;
 use std::sync::{
@@ -94,28 +95,28 @@ where
     }
 }
 
-pub trait ActorFuture<I, O, F>
+#[async_trait]
+pub trait ActorFuture<I, O>
 where
     I: Send + 'static,
     O: Send + 'static,
-    F: Future<Output = O> + Send + 'static,
-    Self: Sized + Send + 'static,
+    Self: Sized + Send + Clone + 'static,
 {
-    fn handle(&mut self, input: I) -> F;
+    async fn handle(&mut self, input: I) -> O;
 
     fn spawn(self, cap: usize) -> Handle<I, O> {
         let ActorSocket { tx: handle, rx } = GlobalRegisty::<Self, I, O>::get_or_set(cap);
-        let mut ss = self;
+        let ss = self;
         tokio::spawn(async move {
             let error = Arc::from(AtomicBool::new(false));
             while let Ok((i, tx)) = rx.recv().await {
                 if error.load(Ordering::SeqCst) {
                     break;
                 }
-                let o = ss.handle(i);
                 let error = error.clone();
+                let mut ss = ss.clone();
                 tokio::spawn(async move {
-                    let o = o.await;
+                    let o = ss.handle(i).await;
                     if tx.send(o).is_err() {
                         error.store(true, Ordering::SeqCst);
                     }
@@ -155,28 +156,44 @@ where
     }
 }
 
-#[derive(Clone)]
 pub struct ActorFutureFn<I, O, F, FN>
 where
     I: Send + 'static,
     O: Send + 'static,
     F: Future<Output = O> + Send + 'static,
-    FN: Fn(I) -> F + Send + 'static,
+    FN: Fn(I) -> F + Send + 'static + Clone,
 {
     f: FN,
     _i: std::marker::PhantomData<I>,
     _o: std::marker::PhantomData<O>,
 }
 
-impl<I, O, F, FN> ActorFuture<I, O, F> for ActorFutureFn<I, O, F, FN>
+impl<I, O, F, FN> Clone for ActorFutureFn<I, O, F, FN>
 where
     I: Send + 'static,
     O: Send + 'static,
     F: Future<Output = O> + Send + 'static,
-    FN: Fn(I) -> F + Send + 'static,
+    FN: Fn(I) -> F + Send + 'static + Clone,
 {
-    fn handle(&mut self, input: I) -> F {
-        (self.f)(input)
+    fn clone(&self) -> Self {
+        Self {
+            f: self.f.clone(),
+            _i: self._i.clone(),
+            _o: self._o.clone(),
+        }
+    }
+}
+
+#[async_trait]
+impl<I, O, F, FN> ActorFuture<I, O> for ActorFutureFn<I, O, F, FN>
+where
+    I: Send + 'static,
+    O: Send + 'static,
+    F: Future<Output = O> + Send + 'static,
+    FN: Fn(I) -> F + Send + 'static + Clone,
+{
+    async fn handle(&mut self, i: I) -> O {
+        (self.f)(i).await
     }
 }
 
@@ -185,7 +202,7 @@ where
     I: Send + 'static,
     O: Send + 'static,
     F: Future<Output = O> + Send + 'static,
-    FN: Fn(I) -> F + Send + 'static,
+    FN: Fn(I) -> F + Send + 'static + Clone,
 {
     pub fn new(f: FN) -> Self {
         Self {

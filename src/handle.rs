@@ -3,7 +3,7 @@ use async_channel as channel;
 use tokio::sync::oneshot;
 
 use crate::{
-    actor::{ActorFuture, ActorFutureFn},
+    actor::{Actor, ActorFn, ActorFuture, ActorFutureFn},
     error::{HandleError, HandleResult},
 };
 
@@ -27,6 +27,15 @@ where
     }
 }
 
+pub trait Inspector<I, O>: Send + Clone + 'static {
+    fn before(&mut self, i: I) -> I {
+        i
+    }
+    fn after(&mut self, o: O) -> O {
+        o
+    }
+}
+
 impl<I, O> Handle<I, O>
 where
     I: Send + 'static,
@@ -42,15 +51,41 @@ where
     }
 
     pub async fn try_handle(&self, i: I) -> HandleResult<O> {
-        Ok(self
-            .try_send(i)
+        self.try_send(i)
             .await?
             .await
-            .map_err(|_| HandleError::RecvError)?)
+            .map_err(|_| HandleError::RecvError)
     }
 
     pub async fn handle(&self, i: I) -> O {
         self.try_handle(i).await.expect("failed to handle")
+    }
+
+    pub fn convert<F, V>(self, f: F) -> Handle<I, V>
+    where
+        V: Send + 'static,
+        F: Fn(O) -> V + Send + 'static,
+    {
+        let f = ActorFn::new(f).spawn(1);
+        self.then(f)
+    }
+
+    pub fn inspect<INS>(self, inspector: INS) -> Handle<I, O>
+    where
+        INS: Inspector<I, O>,
+    {
+        let ll = self;
+        ActorFutureFn::new(move |i: I| {
+            let ll = ll.clone();
+            let mut inspector = inspector.clone();
+            async move {
+                let i = inspector.before(i);
+                let o = ll.handle(i).await;
+                let o = inspector.after(o);
+                o
+            }
+        })
+        .spawn(1)
     }
 
     pub fn then<ON>(self, rhs: Handle<O, ON>) -> Handle<I, ON>

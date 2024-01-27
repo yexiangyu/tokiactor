@@ -58,12 +58,8 @@ where
             .lock()
             .expect("failed to lock global handle registry");
         lck.get(&TypeId::of::<T>())
-            .map(|e| {
-                e.sock
-                    .downcast_ref::<ActorSocket<I, O>>()
-                    .expect("failed to get actor socket")
-            })
-            .map(|e| e.clone())
+            .and_then(|entry| entry.sock.downcast_ref::<ActorSocket<I, O>>())
+            .cloned()
     }
 
     pub fn set(cap: usize) -> ActorSocket<I, O> {

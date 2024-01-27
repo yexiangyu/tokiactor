@@ -17,178 +17,203 @@ Add `tokiactor` to `Cargo.toml`, `tokiactor` need `tokio` to make things work.
 tokiactor = "*"
 ```
 
-## Getting started
+## Getting start
 
-### Create actor
+Following code will create `Adder` struct, which will impl `Actor`, then `Adder::spawn()` return a `handle`, then call `Adder` throught `Handle`:
 
-Let's start from create `Actor` first. Actor can be implemented by implying `Actor` or `ActorFuture` trait: 
 ```rust
-use tokiactor::prelude::*;
+use tokiactor::actor::Actor;
 
-struct SlowAdder;
+// define an actor
+struct Adder
+{
+	pub to_add: i32
+}
 
-impl Actor<i32, i32> for SlowAdder
+// impl Actor trait
+impl Actor<i32, i32> for Adder
 {
 	fn handle(&mut self, i: i32) -> i32
 	{
-		std::thread::sleep(std::time::Duration::from_secs(1));
+		let r= self.to_add + i;
+		self.to_add += i;
+		r
+	}
+}
+
+// tokio runtime is needed
+let rt = tokio::runtime::Runtime::new().unwrap();
+
+// spawn actor, return handle, handle do task
+rt.block_on(async move {
+
+	// create instance of Adder, then spawn it
+	let adder_handle = Adder { to_add: 41}.spawn(1);
+
+	// do the calculation asynchronously, adder's status is also change.
+	let r = adder_handle.handle(1).await;
+
+	assert_eq!(r, 42);
+});
+```
+
+## Actor
+
+There are 2 kinds of `Actor` traits in `tokiactor`, Actor can be implemented by implying `Actor` or `ActorFuture` trait, `tokiactor` provide different way to create them: 
+
+- `Actor`: sync function wrapper, executed in `std::thread::Thread` in background.
+
+	- create actor from `struct`
+
+	```rust
+	use tokiactor::prelude::*;
+
+	struct SlowAdder;
+	impl Actor<i32, i32> for SlowAdder
+	{
+		fn handle(&mut self, i: i32) -> i32
+		{
+			std::thread::sleep(std::time::Duration::from_secs(1));
+			i + 1
+		}
+	}
+	```
+	- create actor from `Closure`
+
+	```rust
+	use tokiactor::prelude::*;
+	let adder = ActorFn::new(|n: i32| n + 1);
+	```
+
+	- create actor from `fn`
+	```rust
+	use tokiactor::prelude::*;
+	fn adder(i: i32) -> i32 {i + 1i32}
+	let adder = ActorFn::new(adder);
+	```
+
+
+- `ActorFuture`: async function wrapper, executed in tokio green thread, [async-trait](https://docs.rs/async-trait/latest/async_trait/) is needed to impl `ActorFuture`.
+	- create from `struct`
+
+	```rust
+	use tokiactor::prelude::*;
+	use async_trait::async_trait;
+
+	#[derive(Clone)] // TODO: this 'Clone' derive should be eleminated in the future?;
+	struct Adder;
+
+	#[async_trait]
+	impl ActorFuture<i32, i32> for Adder
+	{
+		async fn handle(&mut self, i: i32) -> i32
+		{
+			i + 1
+		}
+	}
+	```
+
+	- create from `Closure` return `Future`
+
+	```rust
+	use tokiactor::prelude::*;
+	let adder = ActorFutureFn::new(|i: i32| async move { i + 1});
+	```
+
+	- create from `async fn`
+
+	```rust
+	use tokiactor::prelude::*;
+	async fn add(i: i32) -> i32
+	{
 		i + 1
 	}
-}
-```
-or, create `Actor` from `fn`:
+	let adder = ActorFutureFn::new(add);
+	```
+
+## spawn
+
+ Both `Actor` and `ActorFuture` impl different spawn methods, the spawn will return `Handle`:
+
+ - `spawn(self, cap: usize)`
+
+   	spawn single instance of actor, `cap` is the deepth of channel for `Actor`.
+
+	```rust
+	use tokiactor::prelude::*;
+	let adder = ActorFn::new(|i: i32| i + 1);
+	let handle: Handle<i32, i32> = adder.spawn(1);
+	```
+
+ - `spawn_n(self, n: usize, cap: usize)`
+	
+	spawn `n` instances of actor, `cap` is the deepth of channel for `Actor`, if `Actor` impl `Clone` trait.
+
+	```rust
+	use tokiactor::prelude::*;
+	let adder = ActorFn::new(|i: i32| i + 1);
+	let handle: Handle<i32, i32> = adder.spawn_n(10, 1); //spwan 10 instance of adder
+	```
+- `n_spawn(actors: IntoIterator<Item = Actor>, cap: usize)`
+
+  spawn many instances of actor, from iterator of `Actor`, `cap` is the deepth of channel for `Actor`
+  ```rust
+  use tokiactor::prelude::*;
+  use futures::Future;
+  use async_trait::async_trait;
+
+  #[derive(Clone)]
+  struct Adder;
+
+  impl Actor<i32, i32> for Adder
+  {
+
+	fn handle(&mut self, i: i32) -> i32 
+	{
+		  i + 1
+	}
+  }
+
+  let rt = tokio::runtime::Runtime::new().unwrap();
+
+  rt.block_on(async move {
+	let handle = Adder::n_spawn([Adder, Adder], 1);
+	assert_eq!(handle.handle(1).await, 2);
+  });
+  ```
+
+### Handle
+
+Different ```Handle``` can be connected to build new type of `Handle`.
+
 ```rust
 use tokiactor::prelude::*;
+use tokio;
 
-fn slow_adder_fn_impl(i: i32) -> i32 {
-	std::thread::sleep(std::time::Duration::from_secs(1));
-	i + 1
-}
-
-let slow_adder_actor = ActorFn::new(slow_adder_fn_impl);
-```
-or, create `Actor` from `Closure`:
-```rust
-use tokiactor::prelude::*;
-
-let slow_adder_actor = ActorFn::new(|i: i32| { 
-	std::thread::sleep(std::time::Duration::from_secs(1));
-	i + 1
-});
-```
-or, create `Actor` from `async fn` or `Closure` return `Future` type:
-```rust
-use tokiactor::{prelude::*, tokio};
-
-async fn slow_adder_fn_impl(i: i32) -> i32 {
-	tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-	i + 1
-}
-
-let slow_adder_actor = ActorFutureFn::new(slow_adder_fn_impl);
-
-let another_slow_adder_actor = ActorFutureFn::new(|i: i32| { 
-	async move {
-		tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-		i + 1
-	}
-});
-```
-
-### Spawn then run with `Handle`
-
-Every `Actor` need to `spawn` to run in background, `spawn` will return `Handle`, then `Actor` can handle request thru `Handle::handle` method asynchronously. `spawn` ***must*** be called in `tokio` runtime.
-```rust
-use tokiactor::{tokio, prelude::*};
-let rt = tokio::runtime::Runtime::new().unwrap();
-rt.block_on(
-	async move {
-		let adder_actor = ActorFutureFn::new(|i: i32| { 
-			async move {
-				tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-				i + 1
-			}
-		});
-		let handle = adder_actor.spawn(1); // spawn actor, with channel depth = 1
-		assert_eq!(handle.handle(1).await, 2);
-});
-```
-
-If `Actor` impl `Clone` trait, `spawn_n` can help to spawn multiple independent `Actor`, to loadbalance the request: 
-
-```rust
-use tokiactor::{prelude::*, tokio, futures};
-
-// this function is clonable
-fn slow_adder_fn_impl(i: i32) -> i32 {
-	std::thread::sleep(std::time::Duration::from_secs(1));
-	i + 1
-}
-let adder_actor = ActorFn::new(slow_adder_fn_impl);
-let rt = tokio::runtime::Runtime::new().unwrap();
-rt.block_on(
-	async move {
-		let add_handle = adder_actor.spawn_n(10, 1);
-		let mut results = vec![];
-		for i in 0..10
-		{
-			let add_handle = add_handle.clone();
-			let result = tokio::spawn(async move {
-				add_handle.handle(i).await
-			});
-			results.push(result);
-		}
-		for (n, result) in results.into_iter().enumerate()
-		{
-			assert_eq!(n as i32 + 1, result.await.unwrap());
-		}
-	}
-);
-```
-The code above did use all `Actor` spawned, but with unnecessary steps like clone `Handle` and `tokio::spawn`, or, we can use `futures::StreamExt` and `futures::Stream` to make actors work in parallel more gracefully:
-```rust
-use tokiactor::{prelude::*, tokio, futures};
-use futures::{Stream, StreamExt};
-
-// this function is clonable
-fn slow_adder_fn_impl(i: i32) -> i32 {
-	std::thread::sleep(std::time::Duration::from_secs(1));
-	i + 1
-}
-let adder_actor = ActorFn::new(slow_adder_fn_impl);
-let rt = tokio::runtime::Runtime::new().unwrap();
-rt.block_on(
-	async move {
-		let add_handle = adder_actor.spawn_n(10, 1);
-
-		let results = futures::stream::iter((0..10))
-		    .map(|i| add_handle.handle(i))
-			.buffered(10)
-			.collect::<Vec<_>>().await;
-
-		for (n, result) in results.into_iter().enumerate()
-		{
-			assert_eq!(n as i32 + 1, result);
-		}
-	}
-);
-```
-### Connect `Handle` together
-
-`Handle` implement some helper function to chain different `Handle` with each other, like `then`, `join`, `and_then`..., here is an example: 
-```rust
-use tokiactor::{prelude::*, tokio, futures};
-use futures::{Stream, StreamExt};
+let add = ActorFutureFn::new(|i: i32| async move { i + 1 });
+let min = ActorFutureFn::new(|i: i32| async move { i - 1 });
+let mul = ActorFn::new(|i: i32| i * 42);
+let div = ActorFn::new(|i: i32| match i== 0 {true => None, false => Some(100.0/i as f32)});
 
 let rt = tokio::runtime::Runtime::new().unwrap();
+
 rt.block_on(
 	async move {
+		// spawn 4 actor to handle
+		let add = add.spawn(1);
+		let min = min.spawn(1);
+		let mul = mul.spawn(1);
+		let div = div.spawn(1);
 
-		let adder = ActorFn::new(|i: i32| { i + 1 }).spawn(1);
-		let f32er = ActorFn::new(|i: i32| { i as f32}).spawn(1);
-		let muler = ActorFn::new(|i: f32| { i * 2.0 }).spawn(1);
+		// connect all handle together
+		// 100/((i + 1)  - 1) * 42
+		let all = add.then(min).then(div).convert(|i: Option<f32>| i.map(|i| i as i32)).map(mul); 
 
-		// connect adder, f32er, muler together.
-		let handle = adder.then(f32er).then(muler);
-		assert!((handle.handle(1).await - 4.0).abs() < 0.0000001);
-
-		// divder will return None if input equals 0.0
-		let diver = ActorFn::new(|i: f32| { match i == 0.0 {
-			true => None,
-			false => Some(10.0/i)
-		} }).spawn(1);
-
-		let abser = ActorFn::new(|i: f32| { i.abs() }).spawn(1);
-
-		// connect handler with diver, then map to abser
-		let handle = handle.then(diver).map(abser);
-
-		assert!(handle.handle(-1).await.is_none());
-
-		assert!(handle.handle(1).await.is_some());
+		assert_eq!(all.handle(0).await, None);
 	}
 )
 ```
+
 
 ## What's next in the future version of `tokiactor`
 
@@ -196,3 +221,4 @@ Here is a possible `TODO` list in mind:
 
 - [] `Router`: `Actor` is isomorphic now, which means request to `Handle`  could not be routed to specific `Actor` instance. 
 - [] `Autoscale`: `Actor` now spawn manually with some specific instances number, what about autoscaling more `Actor` if needed?
+- [] remove `Clone` for `ActorFuture`
