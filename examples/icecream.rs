@@ -5,14 +5,18 @@ use rand::*;
 use tokiactor::*;
 use tracing::*;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum Flavor {
+    #[error("chocox{0}")]
     Choco(u32),
+    #[error("berryx{0}")]
     Berry(u32),
+    #[error("plain")]
     Plain,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("icecream milk={}+sugar={}+{}", .milk, .sugar, .flavor)]
 struct Icecream {
     milk: u32,
     sugar: u32,
@@ -64,8 +68,11 @@ async fn main() {
     let tm = Instant::now();
     for order in orders {
         let tm = Instant::now();
-        let res = factory.handle(order).await;
-        info!("[factory] return {:?}, delta={:?}", res, tm.elapsed());
+        let i = factory.handle(order).await;
+        match i {
+            Some(i) => info!("[factory] return {}, delta={:?}", i, tm.elapsed()),
+            None => info!("[factory] return none, delta={:?}", tm.elapsed()),
+        }
     }
     info!("[factory] process 10 orders in {:?}", tm.elapsed());
 
@@ -75,7 +82,10 @@ async fn main() {
         .map(|o| async {
             let tm = Instant::now();
             let i = factory.handle(o).await;
-            info!("[factory] return {:?}, delta={:?}", i, tm.elapsed());
+            match i {
+                Some(i) => info!("[factory] return {}, delta={:?}", i, tm.elapsed()),
+                None => info!("[factory] return none, delta={:?}", tm.elapsed()),
+            }
         })
         .buffered(10)
         .collect::<Vec<_>>()

@@ -137,4 +137,4 @@ let rt = tokio::runtime::Runtime::new().unwrap().block_on(
 );
 ```
 
-Please check `examples/icecream.rs` out for more complicated use case.
+Please check [`examples/icecream.rs`](https://github.com/yexiangyu/tokiactor/blob/main/examples/icecream.rs) out for more complicated use case.

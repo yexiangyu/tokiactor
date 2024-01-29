@@ -65,12 +65,14 @@ pub enum HandleError<T> {
     Recv(#[from] tokio::sync::oneshot::error::RecvError),
 }
 
-/// Trait help to inspect black-boxed `Handle` i/o
+/// A trait for inspecting input and output values.
 pub trait Inspector<I, O> {
+    /// Inspects the input value and returns it.
     fn inspect_i(&mut self, i: I) -> I {
         i
     }
 
+    /// Inspects the output value and returns it.
     fn inspect_o(&mut self, o: O) -> O {
         o
     }
