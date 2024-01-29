@@ -4,18 +4,22 @@
 
 [tokiactor](https://github.com/yexiangyu/tokiactor) is a minimized implementation of `actor` pattern based on `tokio` runtime. No concepts like ~~`System`~~ or ~~`Context`~~ or ~~`Message`~~ involved, just `Handle` and `Actor`.
 
-In `tokiactor`, `Actor` is a wrapper of `sync` and `async` function. `sync` function will be executed in multiple system threads, `async` function will be executed in `tokio` green thread asynchronously.
+In `tokiactor`, `Actor` is a wrapped function, `sync` ort `async`.
+
+- `sync` function will be executed in multiple system threads
+- `async` function will be executed in `tokio` green thread asynchronously.
 
 Large batch tasks like processing thousands of pictures can be done in parallel by leveraging buffered `futures::StreamExt` trait from crate `futures`.
 
 ## Installation
 
-Add `tokiactor` to `Cargo.toml`, `tokiactor` needs `tokio` to make things work.
+Add `tokiactor` to `Cargo.toml`
 
 ```toml
 [dependencies]
 tokiactor = "*"
 ```
+`tokiactor` needs `tokio` to make things work.
 
 ## Getting start
 
@@ -27,7 +31,9 @@ use tokiactor::*;
 
 let rt = tokio::runtime::Runtime::new().unwrap().block_on(
 	async move {
+		// create handle, then spawn a closure.
 		let handle = Handle::new(1).spawn(move |i: i32| i+ 41);
+		// call actor thru 'handle' method
 		assert_eq!(handle.handle(1).await, 42);
 	}
 );
@@ -72,7 +78,7 @@ let rt = tokio::runtime::Runtime::new().unwrap().block_on(
 
 ###  Actor spawn
 
-There are many different ways to spawn an `Actor`:
+There are different ways to spawn an `Actor`:
 
 -  To spawn ***sync*** `Actor`
 
@@ -82,13 +88,13 @@ There are many different ways to spawn an `Actor`:
 
 -  To spawn ***async*** `Actor`
 
-	- `Handle::spawn_tokio`: spawn `Actor` in background tokio thread, all task will be executed in independent specific tokio thread.
+	- `Handle::spawn_tokio`: spawn `Actor` in background tokio thread, every async `handle` will spawn an new tokio thread at background.
 
 please check [docs.rs](http://docs.rs/tokiactor) for further infomation.
 
-### Handle<I, O>
+### Handle
 
-`Handle<I, O>` can be connected together, build another type of `Handle`
+`Handle` can be connected together, build another type of `Handle`
 
 ```rust
 use tokio;
@@ -113,4 +119,22 @@ let rt = tokio::runtime::Runtime::new().unwrap().block_on(
 	}
 );
 ```
+
+`Handle` can spawn both `async` and `sync` actor at the same time
+
+```rust
+use tokio;
+use tokiactor::*;
+
+let rt = tokio::runtime::Runtime::new().unwrap().block_on(
+	async move {
+		// Just a demo, don't do it in real code.
+		// spawn a fn
+		let handle = Handle::new(1).spawn(move |i: i32| i + 1);
+		// spawn an async fn
+		handle.spawn_tokio(move |i: i32| async move {i * 2});
+	}
+);
+```
+
 Please check `examples/icecream.rs` out for more complicated use case.

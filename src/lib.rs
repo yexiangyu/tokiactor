@@ -81,6 +81,12 @@ where
     I: Send + 'static,
     O: Send + 'static,
 {
+    /// create a new Handle with `n` of channel depth
+    /// ```rust
+    /// use tokiactor::*;
+    ///
+    /// let handle = Handle::<i32, i32>::new(1);
+    /// ```
     pub fn new(n: usize) -> Self {
         let (tx, rx) = match n {
             0 => async_channel::unbounded(),
@@ -89,6 +95,11 @@ where
         Self { n, tx, rx }
     }
 
+    /// spawn `Actor` with type impl `Into<Actor<I, O, FN>>` in system thread
+    /// ```rust
+    /// use tokiactor::*;
+    /// let handle = Handle::new(1).spawn(|i: i32| i + 1);
+    /// ```
     pub fn spawn<FN, IntoActor>(self, actor: IntoActor) -> Handle<I, O>
     where
         FN: FnMut(I) -> O + Send + 'static,
@@ -106,6 +117,11 @@ where
         self
     }
 
+    /// spawn `n` `Actor` with type impl `Into<Actor<I, O, FN>>` in system threads when `Actor` is `Clone`
+    /// ```rust
+    /// use tokiactor::*;
+    /// let handle = Handle::new(1).spawn_n(10, |i: i32| i + 1);
+    /// ```
     pub fn spawn_n<FN, IntoActor>(self, n: usize, actor: IntoActor) -> Handle<I, O>
     where
         FN: FnMut(I) -> O + Send + 'static,
@@ -128,6 +144,20 @@ where
         self
     }
 
+    /// spawn async `Actor` with type impl `Into<Actor<I, O, FU, FN>>` in tokio thread
+    /// ```rust
+    /// use tokiactor::*;
+    /// use tokio;
+    /// tokio::runtime::Runtime::new().unwrap().block_on(
+    ///     async move {
+    ///         let r = Handle::new(1)
+    ///             .spawn_tokio(move |i: i32| async move {i + 41})
+    ///             .handle(1)
+    ///             .await;
+    ///         assert_eq!(r, 42)
+    ///     }
+    /// );
+    /// ```
     pub fn spawn_tokio<FN, FU, IntoActor>(self, actor: IntoActor) -> Handle<I, O>
     where
         FN: FnMut(I) -> FU + Send + 'static,
@@ -155,12 +185,38 @@ where
         self
     }
 
+    /// Handle input
+    /// ```rust
+    /// use tokiactor::*;
+    /// use tokio;
+    /// tokio::runtime::Runtime::new().unwrap().block_on(
+    ///     async move {
+    ///         let r = Handle::new(1)
+    ///             .spawn_tokio(move |i: i32| async move {i + 41})
+    ///             .handle(1)
+    ///             .await;
+    ///     }
+    /// );
+    /// ```
     pub async fn handle(&self, i: I) -> O {
         let (t, r) = tokio::sync::oneshot::channel::<O>();
         self.tx.send((i, t)).await.expect("failed to send to actor");
         r.await.expect("failed to recv from actor")
     }
 
+    /// Try handle input, return error when actor is dead...
+    /// ```rust
+    /// use tokiactor::*;
+    /// use tokio;
+    /// tokio::runtime::Runtime::new().unwrap().block_on(
+    ///     async move {
+    ///         Handle::new(1)
+    ///             .spawn_tokio(move |i: i32| async move {i + 41})
+    ///             .try_handle(1)
+    ///             .await;
+    ///     }
+    /// );
+    /// ```
     pub async fn try_handle(
         &self,
         i: I,
@@ -170,6 +226,43 @@ where
         Ok(r.await?)
     }
 
+    /// Inspect Handle excution, check `Inspector` trait for more info
+    /// ```rust
+    /// use tokiactor::*;
+    /// use tokio;
+    /// use std::time::Instant;
+    ///
+    /// #[derive(Clone)]
+    /// struct Timer(Instant);
+    ///
+    /// impl Inspector<i32, i32> for Timer
+    /// {
+    ///     fn inspect_i(&mut self, i: i32) -> i32
+    ///     {
+    ///         self.0 = Instant::now();
+    ///         i
+    ///     }
+    ///
+    ///     fn inspect_o(&mut self, o: i32) -> i32
+    ///     {
+    ///         let delta = self.0.elapsed();
+    ///         // get execution time, do logging...
+    ///         dbg!(delta);
+    ///         o
+    ///     }
+    /// }
+    ///
+    /// tokio::runtime::Runtime::new().unwrap().block_on(
+    ///     async move {
+    ///         Handle::new(1)
+    ///             .spawn_tokio(move |i: i32| async move {i + 41})
+    ///             .inspect(Timer(Instant::now()))
+    ///             .try_handle(1)
+    ///             .await;
+    ///     }
+    /// );
+    ///
+    /// ```
     pub fn inspect<INS>(self, ins: INS) -> Handle<I, O>
     where
         INS: Inspector<I, O> + Send + 'static + Clone,
@@ -186,6 +279,19 @@ where
         }))
     }
 
+    ///convert `Handle<I, O>` to `Handle<I, P>` with `Fn(O)->P`
+    /// ```rust
+    /// use tokiactor::*;
+    /// use tokio;
+    ///
+    /// tokio::runtime::Runtime::new().unwrap().block_on(
+    ///     async move {
+    ///         Handle::new(1)
+    ///             .spawn(move |i: i32| i + 1)
+    ///             .convert(|v| v as f32);
+    ///     }
+    /// )
+    /// ```
     pub fn convert<F, P>(self, f: F) -> Handle<I, P>
     where
         P: Send + 'static,
@@ -198,6 +304,20 @@ where
         }))
     }
 
+    ///`Handle<I, O> + Handle<O, P> => Handle<I, P>`
+    /// ```rust
+    /// use tokiactor::*;
+    /// use tokio;
+    ///
+    /// tokio::runtime::Runtime::new().unwrap().block_on(
+    ///     async move {
+    ///         let r = Handle::new(1)
+    ///             .spawn(move |i: i32| i + 1)
+    ///             .then(Handle::new(1).spawn(move |i: i32| i * 10)).handle(1).await;
+    ///         assert_eq!(r, 20);
+    ///     }
+    /// )
+    /// ```
     pub fn then<P>(self, rhs: Handle<O, P>) -> Handle<I, P>
     where
         P: Send + 'static,
@@ -214,6 +334,20 @@ where
         })
     }
 
+    /// `Handle<I, O> | Handle<U, V> => Handle<(I,U),(O,V)>`
+    /// ```rust
+    /// use tokiactor::*;
+    /// use tokio;
+    ///
+    /// tokio::runtime::Runtime::new().unwrap().block_on(
+    ///     async move {
+    ///         let r = Handle::new(1)
+    ///             .spawn(move |i: i32| i + 1)
+    ///             .join(Handle::new(1).spawn(move |i: i32| i * 10)).handle((2, 1)).await;
+    ///         assert_eq!(r, (3, 10));
+    ///     }
+    /// )
+    /// ```
     pub fn join<U, V>(self, rhs: Handle<U, V>) -> Handle<(I, U), (O, V)>
     where
         U: Send + 'static,
@@ -237,6 +371,20 @@ where
     I: Send + 'static,
     O: Send + 'static,
 {
+    /// `OptionHandle<I, O> | OptionHandle<U, V> => OptionHandle<(I,U), (O,V)>`
+    /// ```rust
+    /// use tokiactor::*;
+    /// use tokio;
+    ///
+    /// tokio::runtime::Runtime::new().unwrap().block_on(
+    ///     async move {
+    ///         let r = Handle::new(1)
+    ///             .spawn(move |i: i32| Some(i + 1))
+    ///             .and(Handle::new(1).spawn(move |i: i32| Some(i * 10))).handle((1, 1)).await;
+    ///         assert_eq!(r, Some((2, 10)));
+    ///     }
+    /// )
+    /// ```
     pub fn and<U, V>(self, rhs: OptionHandle<U, V>) -> OptionHandle<(I, U), (O, V)>
     where
         U: Send + 'static,
@@ -249,6 +397,20 @@ where
             })
     }
 
+    /// `OptionHandle<I, O> + OptionHandle<O, P> => OptionHandle<I, P>`
+    /// ```rust
+    /// use tokiactor::*;
+    /// use tokio;
+    ///
+    /// tokio::runtime::Runtime::new().unwrap().block_on(
+    ///     async move {
+    ///         let r = Handle::new(1)
+    ///             .spawn(move |i: i32| Some(i + 1))
+    ///             .and_then(Handle::new(1).spawn(move |i: i32| Some(i * 10))).handle(1).await;
+    ///         assert_eq!(r, Some(20));
+    ///     }
+    /// )
+    /// ```
     pub fn and_then<P>(self, rhs: OptionHandle<O, P>) -> OptionHandle<I, P>
     where
         P: Send + 'static,
@@ -268,6 +430,20 @@ where
         }))
     }
 
+    /// `OptionHandle<I, O> + Handle<O, P> => OptionHandle<I, P>`
+    /// ```rust
+    /// use tokiactor::*;
+    /// use tokio;
+    ///
+    /// tokio::runtime::Runtime::new().unwrap().block_on(
+    ///     async move {
+    ///         let r = Handle::new(1)
+    ///             .spawn(move |i: i32| Some(i + 1))
+    ///             .map(Handle::new(1).spawn(move |i: i32| i * 10)).handle(1).await;
+    ///         assert_eq!(r, Some(20));
+    ///     }
+    /// )
+    /// ```
     pub fn map<P>(self, rhs: Handle<O, P>) -> OptionHandle<I, P>
     where
         P: Send + 'static,
@@ -287,6 +463,20 @@ where
         }))
     }
 
+    /// convert `OptionHandle` to `ResultHandle`
+    /// ```rust
+    /// use tokiactor::*;
+    /// use tokio;
+    ///
+    /// tokio::runtime::Runtime::new().unwrap().block_on(
+    ///     async move {
+    ///         let r = Handle::new(1)
+    ///             .spawn(move |i: i32| Some(i + 1))
+    ///             .ok_or("null error").handle(1).await;
+    ///         assert_eq!(r.unwrap(), 2);
+    ///     }
+    /// )
+    /// ```
     pub fn ok_or<C: ToString>(self, context: C) -> ResultHandle<I, O, anyhow::Error> {
         let context = context.to_string();
         self.convert(move |r: Option<O>| r.context(context.clone()))
@@ -314,6 +504,30 @@ where
     O: Send + 'static,
     E: Send + 'static,
 {
+    /// `ResultHandle<I, O, E> + ResultHandle<U, V, EN> => ResultHandle<(I, U), (O, V), anyhow::Error>`
+    /// ```rust
+    /// use tokiactor::*;
+    /// use tokio;
+    /// use thiserror;
+    ///
+    /// #[derive(Debug, thiserror::Error)]
+    /// pub enum Error{}
+    ///
+    /// tokio::runtime::Runtime::new().unwrap().block_on(
+    ///     async move {
+    ///         let r = Handle::new(1)
+    ///             .spawn(move |i: i32| {
+    ///                 Result::<i32, Error>::Ok(i+1)
+    ///              })
+    ///             .and(
+    ///                 Handle::new(1).spawn(move |i: i32| {
+    ///                 Result::<i32, Error>::Ok(i*1)
+    ///             })
+    ///         ).handle((1, 1)).await;
+    ///         assert_eq!(r.unwrap(), (2, 1));
+    ///     }
+    /// );
+    /// ```
     pub fn and<U, V, EN>(
         self,
         rhs: ResultHandle<U, V, EN>,
@@ -333,6 +547,30 @@ where
             })
     }
 
+    /// `ResultHandle<I, O, E> | ResultHandle<O, P, EN> => ResultHandle<I, P, anyhow::Error>`
+    /// ```rust
+    /// use tokiactor::*;
+    /// use tokio;
+    /// use thiserror;
+    ///
+    /// #[derive(Debug, thiserror::Error)]
+    /// pub enum Error{}
+    ///
+    /// tokio::runtime::Runtime::new().unwrap().block_on(
+    ///     async move {
+    ///         let r = Handle::new(1)
+    ///             .spawn(move |i: i32| {
+    ///                 Result::<i32, Error>::Ok(i+1)
+    ///              })
+    ///             .and_then(
+    ///                 Handle::new(1).spawn(move |i: i32| {
+    ///                 Result::<i32, Error>::Ok(i*10)
+    ///             })
+    ///         ).handle(1).await;
+    ///         assert_eq!(r.unwrap(), 20);
+    ///     }
+    /// );
+    /// ```
     pub fn and_then<P, EN>(self, rhs: ResultHandle<O, P, EN>) -> ResultHandle<I, P, anyhow::Error>
     where
         E: Sync + std::error::Error,
@@ -352,6 +590,30 @@ where
         }))
     }
 
+    /// `ResultHandle<I, O, E> | Handle<O, P> => ResultHandle<I, P, E>`
+    /// ```rust
+    /// use tokiactor::*;
+    /// use tokio;
+    /// use thiserror;
+    ///
+    /// #[derive(Debug, thiserror::Error)]
+    /// pub enum Error{}
+    ///
+    /// tokio::runtime::Runtime::new().unwrap().block_on(
+    ///     async move {
+    ///         let r = Handle::new(1)
+    ///             .spawn(move |i: i32| {
+    ///                 Result::<i32, Error>::Ok(i+1)
+    ///              })
+    ///             .map(
+    ///                 Handle::new(1).spawn(move |i: i32| {
+    ///                 i*10
+    ///             })
+    ///         ).handle(1).await;
+    ///         assert_eq!(r.unwrap(), 20);
+    ///     }
+    /// );
+    /// ```
     pub fn map<P>(self, rhs: Handle<O, P>) -> ResultHandle<I, P, E>
     where
         P: Send + 'static,
@@ -369,6 +631,25 @@ where
         }))
     }
 
+    /// `ResultHandle<I, O, E> => OptionHandle<I, O>`
+    /// ```rust
+    /// use tokiactor::*;
+    /// use tokio;
+    /// use thiserror;
+    ///
+    /// #[derive(Debug, thiserror::Error)]
+    /// pub enum Error{}
+    ///
+    /// tokio::runtime::Runtime::new().unwrap().block_on(
+    ///     async move {
+    ///         let r = Handle::new(1)
+    ///             .spawn(move |i: i32| {
+    ///                 Result::<i32, Error>::Ok(i+1)
+    ///              }).ok().handle(1).await;
+    ///         assert_eq!(r.unwrap(), 2);
+    ///     }
+    /// );
+    /// ```
     pub fn ok(self) -> OptionHandle<I, O> {
         self.convert(move |r: Result<O, E>| r.ok())
     }
