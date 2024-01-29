@@ -76,19 +76,13 @@ There are many different ways to spawn an `Actor`:
 
 -  To spawn ***sync*** `Actor`
 
-	- `Actor::spawn`: spawn `Actor` in `1` background thread
+	- `Handle::spawn`: spawn `Actor` in `1` background thread
 
-	- `Actor::spawn_n`: spawn `n` `Actor` in `fn` impl `Clone` in `n` background threads.
-
-	- `Actor::n_spawn`: spawn `n` `Actor` created already, `n` background threads.
+	- `Handle::spawn_n`: spawn `n` `Actor` in `fn` impl `Clone` in `n` background threads.
 
 -  To spawn ***async*** `Actor`
 
-	- `Actor::spawn_tokio`: spawn `Actor` in `1` background tokio thread
-
-	- `Actor::spawn_n_tokio`: spawn `n` `Actor` in `fn` impl `Clone` in `n` background tokio threads.
-
-	- `Actor::n_spawn_tokio`: spawn `n` `Actor` created before, `n` background tokio threads.
+	- `Handle::spawn_tokio`: spawn `Actor` in background tokio thread, all task will be executed in independent specific tokio thread.
 
 please check [docs.rs](http://docs.rs/tokiactor) for further infomation.
 
