@@ -1,110 +1,128 @@
-use rand::Rng;
-use std::sync::Arc;
-use std::time::Duration;
-use tokiactor::prelude::*;
-use tokio::sync::Mutex;
+use futures::StreamExt;
+use std::time::Instant;
+
+use rand::*;
+use tokiactor::*;
 use tracing::*;
+
+#[derive(Debug)]
+pub enum Flavor {
+    Choco(u32),
+    Berry(u32),
+    Plain,
+}
+
+#[derive(Debug)]
+struct Icecream {
+    milk: u32,
+    sugar: u32,
+    flavor: Flavor,
+}
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
-    info!("started icecream factory");
+    let milk = init_store("milk");
+    let sugar = init_store("sugar");
+    let choco = init_store("choco");
+    let berry = init_store("berry");
 
-    let milk = create_store("milk").await;
-    let sugar = create_store("sugar").await;
-
-    let base = milk.and(sugar);
-
-    let berry = create_store("berry").await;
-    let choco = create_store("choco").await;
-
-    let flavor = berry.and(choco);
-
-    let prepare = base.and(flavor);
-
-    let prepare = ActorFutureFn::new(move |(m, s, b, c): (u32, u32, u32, u32)| {
-        let prepare = prepare.clone();
-        async move {
-            match prepare.handle(((m, s), (b, c))).await {
-                Some(((m, s), (b, c))) => Some((m, s, b, c)),
-                None => None,
-            }
-        }
-    })
-    .spawn(1);
-
-    for _ in 0..20 {
-        loop {
-            let (m, s, b, c) = generate_order();
-            match prepare.handle((m, s, b, c)).await {
-                Some((m, s, b, c)) => {
-                    info!("got icecream with milk={m}, sugar={s}, berry={b}, choco={c}");
-                    break;
-                }
-                None => {
-                    error!("fail icecream with milk={m}, sugar={s}, berry={b}, choco={c}");
+    let pipe = milk
+        .and(sugar)
+        .and(Handle::new(10).spawn_tokio(move |f: Flavor| {
+            let berry = berry.clone();
+            let choco = choco.clone();
+            async move {
+                match f {
+                    Flavor::Berry(needs) => berry.handle(needs).await.map(|res| Flavor::Berry(res)),
+                    Flavor::Choco(needs) => choco.handle(needs).await.map(|res| Flavor::Choco(res)),
+                    Flavor::Plain => Some(Flavor::Plain),
                 }
             }
-        }
+        }))
+        .convert(|i| {
+            i.map(|((milk, sugar), flavor)| Icecream {
+                milk,
+                sugar,
+                flavor,
+            })
+        });
+
+    let factory = Handle::new(10)
+        .spawn(move |i: Icecream| {
+            let Icecream {
+                milk,
+                sugar,
+                flavor,
+            } = i;
+            ((milk, sugar), flavor)
+        })
+        .then(pipe);
+
+    let orders = (0..20).map(|_| generate_order());
+
+    let tm = Instant::now();
+    for order in orders {
+        let tm = Instant::now();
+        let res = factory.handle(order).await;
+        info!("[factory] return {:?}, delta={:?}", res, tm.elapsed());
     }
-}
+    info!("[factory] process 10 orders in {:?}", tm.elapsed());
 
-fn generate_order() -> (u32, u32, u32, u32) //(milk, sugar, berry, choco)
-{
-    let milk = rand_u32(1, 3);
-    let sugar = rand_u32(0, 2);
-    let (berry, choco) = match rand_u32(0, 3) {
-        0 => (0, rand_u32(1, 2)),              //choco only
-        1 => (rand_u32(1, 2), 0),              // berry only
-        2 => (rand_u32(1, 2), rand_u32(1, 2)), // berry and choco
-        _ => (0, 0),                           //none
-    };
-    (milk, sugar, berry, choco)
-}
-
-async fn create_store(name: &'static str) -> Handle<u32, Option<u32>> {
-    let n = Arc::from(Mutex::from(rand_u32(1, 10)));
+    let orders = (0..20).map(|_| generate_order());
+    let tm = Instant::now();
+    let _ = futures::stream::iter(orders)
+        .map(|o| async {
+            let tm = Instant::now();
+            let i = factory.handle(o).await;
+            info!("[factory] return {:?}, delta={:?}", i, tm.elapsed());
+        })
+        .buffered(10)
+        .collect::<Vec<_>>()
+        .await;
     info!(
-        "[store][{}] initialized with {} items in store",
-        name,
-        n.lock().await,
+        "[factory] process 10 orders in {:?} in parallel",
+        tm.elapsed()
     );
-    ActorFutureFn::new(move |needs: u32| {
-        let n = n.clone();
-        async move {
-            let mut nn = n.lock().await;
-            let dur = async_sleep().await;
-            match needs > *nn {
+}
+
+fn init_store(name: &'static str) -> Handle<u32, Option<u32>> {
+    let mut n_available = rand::thread_rng().gen_range(8u32..20);
+    info!("[{name}] init store with {n_available} items");
+    Handle::new(10).spawn_n(
+        10,
+        Actor::from(move |needs: u32| {
+            let ms = rand::thread_rng().gen_range(0..500);
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+            let r = match needs > n_available {
                 true => {
-                    error!("[store][{}] out of store, delta={:?}", name, dur);
-                    let n = n.clone();
-                    tokio::spawn(async move {
-                        let refill = rand_u32(1, 100);
-                        let dur = async_sleep().await;
-                        let mut n = n.lock().await;
-                        *n += refill;
-                        info!("[store][{}] refill {} items, delta={:?}", name, *n, dur);
-                    });
+                    let rfill = rand::thread_rng().gen_range(8u32..20);
+                    n_available += rfill;
+                    error!("[{name}] out of store, refill {rfill} items in {ms}ms");
                     None
                 }
                 false => {
-                    *nn -= needs;
-                    debug!("[store][{}] provide {} items, delta={:?}", name, *nn, dur);
+                    n_available -= needs;
+                    debug!("[{name}] return {needs} items in {ms}ms");
                     Some(needs)
                 }
-            }
-        }
-    })
-    .spawn(1)
+            };
+            r
+        }),
+    )
 }
 
-async fn async_sleep() -> Duration {
-    let ms = rand::thread_rng().gen_range(0..1000);
-    let dur = Duration::from_millis(ms);
-    tokio::time::sleep(dur).await;
-    dur
-}
-
-fn rand_u32(s: u32, e: u32) -> u32 {
-    rand::thread_rng().gen_range(s..e)
+fn generate_order() -> Icecream {
+    let milk = rand::thread_rng().gen_range(1..3);
+    let sugar = rand::thread_rng().gen_range(1..3);
+    let flavor = match rand::thread_rng().gen::<u32>() % 3 {
+        0 => Flavor::Berry(rand::thread_rng().gen_range(1..3)),
+        1 => Flavor::Choco(rand::thread_rng().gen_range(1..3)),
+        _ => Flavor::Plain,
+    };
+    Icecream {
+        milk,
+        sugar,
+        flavor,
+    }
 }
