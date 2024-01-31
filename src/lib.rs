@@ -43,7 +43,7 @@ where
 
 /// Channel to communicated with `Actor` instances
 pub struct Handle<I, O> {
-    n: usize,
+    pub n: usize,
     tx: async_channel::Sender<(I, tokio::sync::oneshot::Sender<O>)>,
     rx: async_channel::Receiver<(I, tokio::sync::oneshot::Sender<O>)>,
 }
